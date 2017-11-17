@@ -1,0 +1,107 @@
+param(
+    # Parameter help description
+    [Parameter()]
+    [String]
+    $ScomApiSrv,
+    [Bool]$ShowInfo = $true
+)
+
+$alertUri = $ScomApiSrv + "/API/Alerts"
+$windowsUri = $ScomApiSrv + "/API/Computer/Windows"
+$linuxUri = $ScomApiSrv + "/API/Computer/Linuz"
+$mgmtSrvUri = $ScomApiSrv + "/API/MonitoringObject/class/9189a49e-b2de-cab0-2e4f-4925b68e335d"
+$maintenanceUri = $ScomApiSrv + "/API/ComputerMaintenance"
+
+
+Start-UDDashboard -Name "SCOM" -Port 8080 -Dashboard (
+
+    New-UDDashboard -Title "System Center Operations Manager" -NavBarColor "#666666" -BackgroundColor "#f2f2f2" -Content {
+        
+        New-UDRow {
+
+        New-UDColumn -Size 3 {
+            
+            New-UDMonitor -Type Line -Title "This servers CPU usage" -DataPointHistory 20 -RefreshInterval 5 -ChartBackgroundColor "#FFBFBF" -ChartBorderColor "red" -Endpoint {
+                (Get-Counter '\Processor(_Total)\% Processor Time').counterSamples.CookedValue | Out-UDMonitorData
+            
+            
+            }
+
+            New-UDInput -Title "Start Maintenance Mode" -SubmitText "Start Maintenance" -Endpoint {
+                param([string]$ServerName, [Int]$Minutes, [string]$Comment)
+
+                $body = @"
+{
+"DisplayName": "$ServerName",
+"Minutes": $Minutes,
+"comment": "$Comment"
+    
+}
+"@
+
+                $result = invoke-restmethod -Method Post -Uri $maintenanceUri -Body $body -UseDefaultCredentials -ContentType 'Application/json'
+
+
+                New-UDInputAction -Toast "Maintenance set for $ServerName"
+           }
+        }
+
+             New-UDColumn -Size 3 {
+                New-UDCounter -Title "Total Open Alerts" -RefreshInterval 20 -Format '0' -AutoRefresh -Endpoint {
+                    $alerts = (invoke-restmethod -Uri $alertUri -Method get -UseDefaultCredentials -ContentType 'Application/json')
+                    $alerts.count
+                }
+                New-UDCounter -Title "Unhealthy Management Servers" -RefreshInterval 90 -Format '0' -AutoRefresh -Endpoint {
+                    $unhealthyMgmtSrv = invoke-restmethod -Uri $mgmtSrvUri -Method get -UseDefaultCredentials -ContentType 'Application/json' | where {$_.HealthState -ne "Success"}
+                    $unhealthyMgmtSrv.count
+                }
+                New-UDChart -Title "Count by operating system" -Type Bar -AutoRefresh -RefreshInterval 240 -Endpoint {
+                $windowsCount = (Invoke-RestMethod -Method Get -Uri $windowsUri -UseDefaultCredentials).Count
+                $linuxCount = (Invoke-RestMethod -Method Get -Uri $linuxUri -UseDefaultCredentials).Count
+                    $features = @();
+                    $features += [PSCustomObject]@{ "Servers" = "Operating System"; "Windows" = $windowsCount; "Linux" = $linuxCount }
+
+                    $features| Out-UDChartData -LabelProperty "Servers" -DatasetLabel "Operating System" -Dataset @(
+                        New-UDChartDataset -DataProperty "Windows" -Label "Windows" -BackgroundColor "#004F8B" -HoverBackgroundColor "#004F8B"
+                        New-UDChartDataset -DataProperty "Linux" -Label "Linux" -BackgroundColor "#FFC403" -HoverBackgroundColor "#FFC403"
+
+                    )
+                }
+            }
+
+            New-UDColumn -Size 4 {
+                New-UDChart -Type Bar -Title "Alerts by severity" -RefreshInterval 20 -AutoRefresh -Endpoint {
+                
+                    $features = @();
+                    $features += [PSCustomObject]@{ "Alerts" = "Severity"; "Critical" = (($alerts.alertGenerated) | where {$_.Severity -eq 2 }).count; "Warning" = (($alerts.alertGenerated) | where {$_.Severity -eq 1 }).count ; "Informational" = (($alerts.alertGenerated) | where {$_.Severity -eq 0 }).count ;}
+
+                    $features| Out-UDChartData -LabelProperty "Alerts" -DatasetLabel "Severity" -Dataset @(
+                        New-UDChartDataset -DataProperty "Critical" -Label "Critical" -BackgroundColor "#AD2D31" -HoverBackgroundColor "#AD2D31"
+                        New-UDChartDataset -DataProperty "Warning" -Label "warning" -BackgroundColor "#F8B648" -HoverBackgroundColor "#F8B648"
+                        New-UDChartDataset -DataProperty "Informational" -Label "Informational" -BackgroundColor "#649AC6" -HoverBackgroundColor "#649AC6"
+
+                    )
+                }
+
+            if ($ShowInfo -eq $true) {
+            New-UDHtml -Markup "<div class='card' style='background: #666666; color: rgba(255, 255, 255, 1)'>
+            <div class='card-content'><span class='card-title'>About This Dashboard</span>
+            <p>All queries in this dashboard is based on the SCOM WebAPI created by <a href='https://adatum.no'>Martin Ehrnst</a>.<p> Graphic interface is created using Adam Driscoll's amazing Powershell universal dashboad.</p>
+            <p>This dashboard is totally ment as a demo. Showing the potential laying in the dashboard tool and the SCOM Web API. You can perfectly run native PS modules to query the same Operations Manager data. For SCOM dashboard solutions in production environments. Check out SquaredUp</p>
+
+            </div>
+            <div class='card-action'><a href='https://www.github.com/adamdriscoll/poshprotools'>Get universal dashboard</a> <a href='https://github.com/ehrnst/System-Center-Operations-Manager-API'>Get SCOM Web API</a></div>"
+
+            }
+            }
+
+            New-UDColumn -Size 4 {
+                
+            }
+        }
+        New-UDRow {
+            
+        }
+    }
+)
+Start-Process http://localhost:8080
